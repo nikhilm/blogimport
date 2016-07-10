@@ -4,8 +4,9 @@ import (
 	"encoding/xml"
 	"flag"
 	"fmt"
-	"log"
 	"io/ioutil"
+	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,8 +14,6 @@ import (
 	"time"
 	"unicode"
 )
-
-
 
 type Date time.Time
 
@@ -24,58 +23,64 @@ func (d Date) String() string {
 
 func (d *Date) UnmarshalXML(dec *xml.Decoder, start xml.StartElement) error {
 	var v string
-    dec.DecodeElement(&v, &start)
-    t, err := time.Parse("2006-01-02T15:04:05.000-07:00", v)
-    if err != nil {
-    	return err
-    }
-    *d = Date(t)
-    return nil
+	dec.DecodeElement(&v, &start)
+	t, err := time.Parse("2006-01-02T15:04:05.000-07:00", v)
+	if err != nil {
+		return err
+	}
+	*d = Date(t)
+	return nil
 }
 
-type Draft bool 
+type Draft bool
 
 func (d *Draft) UnmarshalXML(dec *xml.Decoder, start xml.StartElement) error {
 	var v string
-    dec.DecodeElement(&v, &start)
-    switch v {
-    case "yes":
-    	*d = true
-    	return nil
-    case "no":
-    	*d = false
-    	return nil
-    }
-    return fmt.Errorf("Unknown value for draft boolean: %s", v)
+	dec.DecodeElement(&v, &start)
+	switch v {
+	case "yes":
+		*d = true
+		return nil
+	case "no":
+		*d = false
+		return nil
+	}
+	return fmt.Errorf("Unknown value for draft boolean: %s", v)
 }
 
 type Author struct {
 	Name string `xml:"name"`
-	Uri string `xml:"uri"`
+	Uri  string `xml:"uri"`
 }
 
 type Export struct {
 	XMLName xml.Name `xml:"feed"`
-	Entries []Entry `xml:"entry"`
+	Entries []Entry  `xml:"entry"`
 }
 
 type Entry struct {
-	ID string `xml:"id"`
-	Published Date `xml:"published"`
-	Updated Date `xml:"updated"`
-	Draft Draft `xml:"control>draft"`
-	Title string `xml:"title"`
-	Content string `xml:"content"`
-	Tags Tags `xml:"category"`
-	Author Author `xml:"author"`
-	Extra string
+	ID        string `xml:"id"`
+	Published Date   `xml:"published"`
+	Updated   Date   `xml:"updated"`
+	Draft     Draft  `xml:"control>draft"`
+	Title     string `xml:"title"`
+	Content   string `xml:"content"`
+	Tags      Tags   `xml:"category"`
+	Author    Author `xml:"author"`
+	Links     Links  `xml:"link"`
+	Extra     string
 }
 type Tag struct {
-	Name string `xml:"term,attr"`
+	Name   string `xml:"term,attr"`
 	Scheme string `xml:"scheme,attr"`
+}
+type Link struct {
+	Rel  string `xml:"rel,attr"`
+	Href string `xml:"href,attr"`
 }
 
 type Tags []Tag
+type Links []Link
 
 func (t Tags) TomlString() string {
 	names := []string{}
@@ -130,10 +135,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if !info.IsDir(){
+	if !info.IsDir() {
 		log.Fatal("Second argument is not a directory.")
- 	}
-
+	}
 
 	b, err := ioutil.ReadFile(args[0])
 	if err != nil {
@@ -174,7 +178,7 @@ func main() {
 		if entry.Draft {
 			drafts++
 		} else {
-			count++		
+			count++
 		}
 	}
 	log.Printf("Wrote %d published posts to disk.", count)
@@ -184,8 +188,31 @@ func main() {
 var delim = []byte("+++\n")
 
 func writeEntry(e Entry, dir string) error {
-	filename := filepath.Join(dir, makePath(e.Title)+".md")
-	f, err := os.OpenFile(filename, os.O_CREATE | os.O_TRUNC | os.O_WRONLY, 0644)
+	var pdir string
+	var file string
+	for _, link := range e.Links {
+		if link.Rel == "alternate" {
+			u, err := url.Parse(link.Href)
+			if err != nil {
+				panic(err)
+			}
+			path := u.Path[1:]
+			file = filepath.Base(path)
+			pdir = filepath.Dir(filepath.Dir(path))
+		}
+	}
+
+	if pdir == "" || file == "" {
+		fmt.Println("Skipping", e.Title)
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Join(dir, pdir), 0755); err != nil {
+		panic(err)
+	}
+
+	filename := filepath.Join(dir, pdir, file)
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
@@ -193,7 +220,6 @@ func writeEntry(e Entry, dir string) error {
 
 	return t.Execute(f, e)
 }
-
 
 // Take a string with any characters and replace it so the string could be used in a path.
 // E.g. Social Media -> social-media
@@ -213,10 +239,3 @@ func unicodeSanitize(s string) string {
 
 	return string(target)
 }
-
-
-
-
-
-
-
